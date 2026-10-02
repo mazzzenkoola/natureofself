@@ -3,8 +3,33 @@ const BG = css.getPropertyValue('--bg').trim();
 const ROPE = css.getPropertyValue('--rope').trim();
 const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
+// -- shade a hex color lighter/darker, for the ambient gradient --
+function shade(hex, pct) {
+  const n = parseInt(hex.replace('#', ''), 16);
+  let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
+  r = Math.min(255, Math.max(0, r + 255 * pct));
+  g = Math.min(255, Math.max(0, g + 255 * pct));
+  b = Math.min(255, Math.max(0, b + 255 * pct));
+  return `rgb(${r | 0},${g | 0},${b | 0})`;
+}
+
+// -- vertical gradient + soft vignette as the background, instead of a flat color --
+function makeBgTexture() {
+  const c = document.createElement('canvas');
+  c.width = 8; c.height = 512;
+  const g = c.getContext('2d');
+  const grad = g.createLinearGradient(0, 0, 0, 512);
+  grad.addColorStop(0, shade(BG, .10));
+  grad.addColorStop(.45, BG);
+  grad.addColorStop(1, shade(BG, -.07));
+  g.fillStyle = grad; g.fillRect(0, 0, 8, 512);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(BG);
+scene.background = makeBgTexture();
 scene.fog = new THREE.Fog(BG, 15, 45);
 
 const cam = new THREE.PerspectiveCamera(50, 1, .1, 100);
@@ -15,15 +40,31 @@ document.body.appendChild(R.domElement);
 const world = new THREE.Group();
 scene.add(world);
 
-const ropeM = new THREE.MeshBasicMaterial({ color: ROPE });
-const lineM = new THREE.LineBasicMaterial({ color: ROPE, transparent: true, opacity: .6 });
+// -- real rope texture, wrapped around the cylinder and tiled along its length --
+const loader = new THREE.TextureLoader();
+const ropePhoto = loader.load((typeof ROPE_IMG !== 'undefined') ? ROPE_IMG : 'rope.jpg');
+ropePhoto.colorSpace = THREE.SRGBColorSpace;
+ropePhoto.wrapS = ropePhoto.wrapT = THREE.RepeatWrapping;
+
+function ropeMatFor(len) {
+  const t = ropePhoto.clone();
+  t.needsUpdate = true;
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.center.set(.5, .5);
+  t.rotation = Math.PI / 2; // the photo runs horizontally; rotate so it tiles along the rope's length
+  t.repeat.set(1, Math.max(1, len / .45));
+  return new THREE.MeshBasicMaterial({ map: t });
+}
+
+const lineM = new THREE.LineBasicMaterial({ color: ROPE, transparent: true, opacity: .55 });
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
 function rope(a, b, r) {
   const d = b.clone().sub(a);
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, d.length(), 5), ropeM);
+  const len = d.length();
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 8), ropeMatFor(len));
   m.position.copy(a).addScaledVector(d, .5);
-  m.quaternion.setFromUnitVectors(V(0, 1, 0), d.normalize());
+  m.quaternion.setFromUnitVectors(V(0, 1, 0), d.clone().normalize());
   return m;
 }
 
@@ -34,8 +75,6 @@ function fray(p, n, len) {
   }
   return new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(q), lineM);
 }
-
-const loader = new THREE.TextureLoader();
 
 // -- works: [x, y, z, height, aspect(w/h), source] --
 const W = [
@@ -59,7 +98,7 @@ const items = W.map(([x, y, z, ph, ar, src], i) => {
   tx.colorSpace = THREE.SRGBColorSpace;
 
   const geo = new THREE.PlaneGeometry(pw, ph, SEG_X, SEG_Y);
-  const base = geo.attributes.position.array.slice(); // remember rest pose
+  const base = geo.attributes.position.array.slice();
   const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tx, side: THREE.DoubleSide }));
   mesh.position.y = ly;
   g.add(mesh);
@@ -83,9 +122,37 @@ for (let i = 0; i < 70; i++) {
   const a = V((Math.random() - .5) * 20, (Math.random() - .5) * 10 + 2, (Math.random() - .5) * 8);
   wp.push(a, a.clone().add(V((Math.random() - .5) * 8, (Math.random() - .5) * 6, (Math.random() - .5) * 4)));
 }
-world.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(wp), new THREE.LineBasicMaterial({ color: ROPE, transparent: true, opacity: .22 })));
+world.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(wp), new THREE.LineBasicMaterial({ color: ROPE, transparent: true, opacity: .18 })));
 
 world.add(rope(V(0, 3, -2), V(0, -40, -2), .06));
+
+// -- drifting dust motes, for an ambient feel --
+function makeDotTexture() {
+  const c = document.createElement('canvas');
+  c.width = c.height = 64;
+  const g = c.getContext('2d');
+  const grad = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  grad.addColorStop(0, 'rgba(255,255,255,.9)');
+  grad.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = grad; g.fillRect(0, 0, 64, 64);
+  return new THREE.CanvasTexture(c);
+}
+const DUST_N = RM ? 0 : 260;
+const dustPos = new Float32Array(DUST_N * 3);
+const dustSeed = [];
+for (let i = 0; i < DUST_N; i++) {
+  dustPos[i * 3] = (Math.random() - .5) * 26;
+  dustPos[i * 3 + 1] = (Math.random() - .5) * 18 + 2;
+  dustPos[i * 3 + 2] = (Math.random() - .5) * 14 - 2;
+  dustSeed.push(Math.random() * 100);
+}
+const dustGeo = new THREE.BufferGeometry();
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({
+  size: .07, map: makeDotTexture(), transparent: true, opacity: .35,
+  color: ROPE, depthWrite: false, sizeAttenuation: true
+}));
+scene.add(dust);
 
 let cP, cT, nd = 4.4;
 const N = items.length + 1;
@@ -141,7 +208,6 @@ document.getElementById('go').onclick = () => {
 const sm = x => x * x * (3 - 2 * x);
 const tmp = V(0, 0, 0);
 
-// -- cloth-like displacement: top row anchored, amplitude grows toward the bottom --
 function updateCloth(o, T) {
   const pos = o.geo.attributes.position;
   const arr = pos.array, base = o.base;
@@ -150,7 +216,7 @@ function updateCloth(o, T) {
   const freq = .9 + o.sp * .3;
   for (let idx = 0; idx < arr.length; idx += 3) {
     const bx = base[idx], by = base[idx + 1];
-    const f = Math.pow(Math.max(0, (o.ph2 * 0 + (o.ph / 2 - by)) / o.ph), 1.6); // 0 at top, 1 at bottom
+    const f = Math.pow(Math.max(0, (o.ph / 2 - by) / o.ph), 1.6);
     const wave = Math.sin(T * freq + bx * 1.6 + o.ph2) + .5 * Math.sin(T * freq * 1.7 + by * 2.1 + o.ph2 * 1.3);
     arr[idx + 2] = base[idx + 2] + wave * ampZ * f;
     arr[idx] = bx + Math.sin(T * freq * .8 + by * 1.3 + o.ph2) * ampX * f;
@@ -178,16 +244,28 @@ function frame(now) {
   items.forEach(o => {
     tmp.set(o.x, o.y, o.z);
     const d = cam.position.distanceTo(tmp);
-    const near = Math.min(1, Math.max(0, 1 - (d - nd * 1.15) / 5)); // 1 when very close, 0 when far
-    const k = .25 + .75 * (1 - near); // sway: calmer up close for readability
+    const near = Math.min(1, Math.max(0, 1 - (d - nd * 1.15) / 5));
+    const k = .25 + .75 * (1 - near);
     o.k += (k - o.k) * .05;
-    const sclTarget = 1 + near * .4; // the approached work grows up to 1.4x
+    const sclTarget = 1 + near * .4;
     o.scl += (sclTarget - o.scl) * .06;
     o.g.scale.setScalar(o.scl);
     o.g.rotation.z = Math.sin(T * o.sp + o.ph2) * .035 * o.k * A;
     o.g.rotation.x = Math.sin(T * o.sp * .7 + o.ph2 * 2) * .02 * o.k * A;
     updateCloth(o, T * A);
   });
+
+  // dust drifts slowly upward and sideways, wrapping around
+  if (DUST_N) {
+    const dp = dustGeo.attributes.position.array;
+    for (let i = 0; i < DUST_N; i++) {
+      const sd = dustSeed[i];
+      dp[i * 3] += Math.sin(T * .05 + sd) * .0009 * A;
+      dp[i * 3 + 1] += .0016 * A;
+      if (dp[i * 3 + 1] > 11) dp[i * 3 + 1] = -7;
+    }
+    dustGeo.attributes.position.needsUpdate = true;
+  }
 
   const idx = e < .08 ? i : (e > .92 ? (i + 1) % N : -1);
   if (started && idx !== shown) {
