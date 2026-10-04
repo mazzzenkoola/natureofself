@@ -40,50 +40,52 @@ document.body.appendChild(R.domElement);
 const world = new THREE.Group();
 scene.add(world);
 
-// -- real rope texture, wrapped around the cylinder and tiled along its length --
+// -- rope as simple line art, matching the hand-drawn sketch: no texture, just
+// a thin solid-colour cord --
 const loader = new THREE.TextureLoader();
-const ropePhoto = loader.load((typeof ROPE_IMG !== 'undefined') ? ROPE_IMG : 'rope.jpg');
-ropePhoto.colorSpace = THREE.SRGBColorSpace;
-ropePhoto.wrapS = ropePhoto.wrapT = THREE.RepeatWrapping;
-
-function ropeMatFor(len) {
-  const t = ropePhoto.clone();
-  t.needsUpdate = true;
-  t.wrapS = t.wrapT = THREE.RepeatWrapping;
-  t.center.set(.5, .5);
-  t.rotation = Math.PI / 2; // the photo runs horizontally; rotate so it tiles along the rope's length
-  t.repeat.set(1, Math.max(1, len / .45));
-  return new THREE.MeshBasicMaterial({ map: t });
-}
-
-const lineM = new THREE.LineBasicMaterial({ color: ROPE, transparent: true, opacity: .55 });
+const ropeMaterial = new THREE.MeshBasicMaterial({ color: ROPE });
+const lineM = new THREE.LineBasicMaterial({ color: ROPE, transparent: true, opacity: .6 });
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
 function rope(a, b, r) {
   const d = b.clone().sub(a);
   const len = d.length();
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 8), ropeMatFor(len));
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 8), ropeMaterial);
   m.position.copy(a).addScaledVector(d, .5);
   m.quaternion.setFromUnitVectors(V(0, 1, 0), d.clone().normalize());
   return m;
 }
 
+// a tangled, branching bundle of curved strands at each attachment point —
+// closer to the sketch's wandering line-tangle than a tidy splay
 function fray(p, n, len) {
-  const q = [];
+  const pts = [];
   for (let i = 0; i < n; i++) {
-    q.push(p.clone(), p.clone().add(V((Math.random() - .5) * .5, len * (.4 + Math.random() * .6), (Math.random() - .5) * .5)));
+    const dir = V((Math.random() - .5), 1, (Math.random() - .5)).normalize();
+    const segs = 3 + Math.floor(Math.random() * 2);
+    let cur = p.clone();
+    for (let s = 0; s < segs; s++) {
+      const step = len * (.35 + Math.random() * .35);
+      const next = cur.clone().add(V(
+        dir.x * step + (Math.random() - .5) * len * .5,
+        dir.y * step * (.5 + Math.random() * .5),
+        dir.z * step + (Math.random() - .5) * len * .5
+      ));
+      pts.push(cur, next);
+      cur = next;
+    }
   }
-  return new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(q), lineM);
+  return new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), lineM);
 }
 
 // -- works: [x, y, z, height, aspect(w/h), source] --
 const W = [
-  [5.0, 1.2, -.6, 2.8, 0.800, 'works/01.jpg'],
-  [2.9, -.9, 1.0, 2.8, 0.665, 'works/02.jpg'],
-  [.9, 1.6, -1.2, 2.8, 0.748, 'works/03.jpg'],
-  [-1.1, -1.4, .6, 2.8, 0.750, 'works/04.jpg'],
-  [-3.1, .7, -.4, 2.8, 0.788, 'works/05.jpg'],
-  [-5.1, -.6, 1.0, 2.8, 0.800, 'works/06.jpg'],
+  [5.75, 1.2, -.6, 3.2, 0.800, 'works/01.jpg'],
+  [3.45, -.9, 1.0, 3.2, 0.665, 'works/02.jpg'],
+  [1.15, 1.6, -1.2, 3.2, 0.748, 'works/03.jpg'],
+  [-1.15, -1.4, .6, 3.2, 0.750, 'works/04.jpg'],
+  [-3.45, .7, -.4, 3.2, 0.788, 'works/05.jpg'],
+  [-5.75, -.6, 1.0, 3.2, 0.800, 'works/06.jpg'],
 ];
 
 const SEG_X = 14, SEG_Y = 20; // cloth subdivisions
@@ -105,12 +107,12 @@ const items = W.map(([x, y, z, ph, ar, src], i) => {
 
   [-1, 1].forEach(s => {
     const a = V(s * pw * .38, top, 0);
-    g.add(rope(a, V(0, 0, 0), .035));
-    g.add(fray(a, 4, .3));
+    g.add(rope(a, V(0, 0, 0), .03));
+    g.add(fray(a, 5, .45));
   });
 
-  g.add(rope(V(0, 0, 0), V(0, 4, 0), .05));
-  g.add(fray(V(0, 4, 0), 9, .9));
+  g.add(rope(V(0, 0, 0), V(0, 4, 0), .045));
+  g.add(fray(V(0, 4, 0), 11, 1.3));
   world.add(g);
 
   return { g, geo, base, pw, ph, x, y, z, ph2: i * 1.7, sp: .5 + .13 * i, k: 1, scl: 1 };
