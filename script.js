@@ -1,9 +1,7 @@
 const css = getComputedStyle(document.documentElement);
 const BG = css.getPropertyValue('--bg').trim();
-const ROPE = css.getPropertyValue('--rope').trim();
 const RM = matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-// -- shade a hex color lighter/darker, for the ambient gradient --
 function shade(hex, pct) {
   const n = parseInt(hex.replace('#', ''), 16);
   let r = (n >> 16) & 255, g = (n >> 8) & 255, b = n & 255;
@@ -13,7 +11,6 @@ function shade(hex, pct) {
   return `rgb(${r | 0},${g | 0},${b | 0})`;
 }
 
-// -- vertical gradient + soft vignette as the background, instead of a flat color --
 function makeBgTexture() {
   const c = document.createElement('canvas');
   c.width = 8; c.height = 512;
@@ -40,93 +37,87 @@ document.body.appendChild(R.domElement);
 const world = new THREE.Group();
 scene.add(world);
 
-// -- rope as simple line art, matching the hand-drawn sketch: no texture, just
-// a thin solid-colour cord --
 const loader = new THREE.TextureLoader();
-const ropeMaterial = new THREE.MeshBasicMaterial({ color: ROPE });
-const lineM = new THREE.LineBasicMaterial({ color: ROPE, transparent: true, opacity: .6 });
+const ropeMaterial = new THREE.MeshBasicMaterial({ color: 0x111111 });
 const V = (x, y, z) => new THREE.Vector3(x, y, z);
 
 function rope(a, b, r) {
   const d = b.clone().sub(a);
   const len = d.length();
-  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 8), ropeMaterial);
+  if (len < .001) return new THREE.Group();
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(r, r, len, 6), ropeMaterial);
   m.position.copy(a).addScaledVector(d, .5);
   m.quaternion.setFromUnitVectors(V(0, 1, 0), d.clone().normalize());
   return m;
 }
 
-// a tangled, branching bundle of curved strands at each attachment point —
-// closer to the sketch's wandering line-tangle than a tidy splay
-function fray(p, n, len) {
-  const pts = [];
-  for (let i = 0; i < n; i++) {
-    const dir = V((Math.random() - .5), 1, (Math.random() - .5)).normalize();
-    const segs = 3 + Math.floor(Math.random() * 2);
-    let cur = p.clone();
-    for (let s = 0; s < segs; s++) {
-      const step = len * (.35 + Math.random() * .35);
-      const next = cur.clone().add(V(
-        dir.x * step + (Math.random() - .5) * len * .5,
-        dir.y * step * (.5 + Math.random() * .5),
-        dir.z * step + (Math.random() - .5) * len * .5
-      ));
-      pts.push(cur, next);
-      cur = next;
-    }
-  }
-  return new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(pts), lineM);
-}
+// -- works, placed at the exact position / size / rotation from the sketch --
+// (built first, so rope segments near each work can be parented to it below)
+const SEG_X = 14, SEG_Y = 20;
 
-// -- works: [x, y, z, height, aspect(w/h), source] --
-const W = [
-  [5.75, 1.2, -.6, 3.2, 0.800, 'works/01.jpg'],
-  [3.45, -.9, 1.0, 3.2, 0.665, 'works/02.jpg'],
-  [1.15, 1.6, -1.2, 3.2, 0.748, 'works/03.jpg'],
-  [-1.15, -1.4, .6, 3.2, 0.750, 'works/04.jpg'],
-  [-3.45, .7, -.4, 3.2, 0.788, 'works/05.jpg'],
-  [-5.75, -.6, 1.0, 3.2, 0.800, 'works/06.jpg'],
-];
-
-const SEG_X = 14, SEG_Y = 20; // cloth subdivisions
-
-const items = W.map(([x, y, z, ph, ar, src], i) => {
-  const pw = ph * ar;
+const items = SVG_WORKS.map((w, i) => {
   const g = new THREE.Group();
-  g.position.set(x, 7, z);
-  const ly = y - 7, top = ly + ph / 2;
+  g.position.set(w.x, w.y, w.z);
+  const baseRotZ = THREE.MathUtils.degToRad(w.rot);
+  g.rotation.z = baseRotZ;
+  g.updateMatrixWorld(true);
 
-  const tx = (typeof IMG !== 'undefined' && IMG[i]) ? loader.load(IMG[i]) : loader.load(src);
+  const tx = (typeof IMG !== 'undefined' && IMG[i]) ? loader.load(IMG[i]) : loader.load(`works/0${i + 1}.jpg`);
   tx.colorSpace = THREE.SRGBColorSpace;
 
-  const geo = new THREE.PlaneGeometry(pw, ph, SEG_X, SEG_Y);
+  const geo = new THREE.PlaneGeometry(w.pw, w.ph, SEG_X, SEG_Y);
   const base = geo.attributes.position.array.slice();
   const mesh = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ map: tx, side: THREE.DoubleSide }));
-  mesh.position.y = ly;
   g.add(mesh);
-
-  [-1, 1].forEach(s => {
-    const a = V(s * pw * .38, top, 0);
-    g.add(rope(a, V(0, 0, 0), .03));
-    g.add(fray(a, 5, .45));
-  });
-
-  g.add(rope(V(0, 0, 0), V(0, 4, 0), .045));
-  g.add(fray(V(0, 4, 0), 11, 1.3));
   world.add(g);
 
-  return { g, geo, base, pw, ph, x, y, z, ph2: i * 1.7, sp: .5 + .13 * i, k: 1, scl: 1 };
+  const reach = Math.max(w.pw, w.ph) * .6 + .25; // catch radius for nearby rope points
+  return { g, geo, base, pw: w.pw, ph: w.ph, x: w.x, y: w.y, z: w.z, reach, baseRotZ, ph2: i * 1.7, sp: .5 + .13 * i, k: 1, scl: 1 };
 });
 
-// -- background web of faint threads --
-const wp = [];
-for (let i = 0; i < 70; i++) {
-  const a = V((Math.random() - .5) * 20, (Math.random() - .5) * 10 + 2, (Math.random() - .5) * 8);
-  wp.push(a, a.clone().add(V((Math.random() - .5) * 8, (Math.random() - .5) * 6, (Math.random() - .5) * 4)));
+// -- the hand-drawn rope tangle, traced point-for-point from the original sketch --
+// any segment with an endpoint close to a work is parented to that work's group,
+// so it sways/scales together with it instead of clipping through a static tangle
+function nearestItem(p) {
+  let best = null, bestD = Infinity;
+  for (const o of items) {
+    const d = Math.hypot(p[0] - o.x, p[1] - o.y, p[2] - o.z);
+    if (d < o.reach && d < bestD) { bestD = d; best = o; }
+  }
+  return best;
 }
-world.add(new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(wp), new THREE.LineBasicMaterial({ color: ROPE, transparent: true, opacity: .18 })));
 
-world.add(rope(V(0, 3, -2), V(0, -40, -2), .06));
+const bgRopes = [];
+(SVG_ROPES || []).forEach((poly, pi) => {
+  const worldGroup = new THREE.Group();
+  const bgPts = [];
+  for (let i = 0; i < poly.length - 1; i++) {
+    const a = poly[i], b = poly[i + 1];
+    const owner = nearestItem(a) || nearestItem(b);
+    if (owner) {
+      const la = owner.g.worldToLocal(V(...a));
+      const lb = owner.g.worldToLocal(V(...b));
+      owner.g.add(rope(la, lb, .018));
+    } else {
+      worldGroup.add(rope(V(...a), V(...b), .018));
+      bgPts.push(a, b);
+    }
+  }
+  if (bgPts.length) {
+    // recenter this strand on its own midpoint so it can sway around its own
+    // pivot, instead of sweeping around the world origin
+    const cx = bgPts.reduce((s, p) => s + p[0], 0) / bgPts.length;
+    const cy = bgPts.reduce((s, p) => s + p[1], 0) / bgPts.length;
+    const cz = bgPts.reduce((s, p) => s + p[2], 0) / bgPts.length;
+    worldGroup.children.forEach(m => m.position.sub(V(cx, cy, cz)));
+    worldGroup.position.set(cx, cy, cz);
+    bgRopes.push({ group: worldGroup, phase: pi * 1.7 + Math.random() * 2, sp: .35 + Math.random() * .35 });
+  }
+  world.add(worldGroup);
+});
+
+// the long cord trailing down out of the tangle, into the fog
+world.add(rope(V(...SVG_TRUNK), V(SVG_TRUNK[0], -38, SVG_TRUNK[2]), .045));
 
 // -- drifting dust motes, for an ambient feel --
 function makeDotTexture() {
@@ -139,24 +130,24 @@ function makeDotTexture() {
   g.fillStyle = grad; g.fillRect(0, 0, 64, 64);
   return new THREE.CanvasTexture(c);
 }
-const DUST_N = RM ? 0 : 260;
+const DUST_N = RM ? 0 : 220;
 const dustPos = new Float32Array(DUST_N * 3);
 const dustSeed = [];
 for (let i = 0; i < DUST_N; i++) {
-  dustPos[i * 3] = (Math.random() - .5) * 26;
-  dustPos[i * 3 + 1] = (Math.random() - .5) * 18 + 2;
-  dustPos[i * 3 + 2] = (Math.random() - .5) * 14 - 2;
+  dustPos[i * 3] = (Math.random() - .5) * 20;
+  dustPos[i * 3 + 1] = (Math.random() - .5) * 18 + 4;
+  dustPos[i * 3 + 2] = (Math.random() - .5) * 12 - 2;
   dustSeed.push(Math.random() * 100);
 }
 const dustGeo = new THREE.BufferGeometry();
 dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
 const dust = new THREE.Points(dustGeo, new THREE.PointsMaterial({
-  size: .07, map: makeDotTexture(), transparent: true, opacity: .35,
-  color: ROPE, depthWrite: false, sizeAttenuation: true
+  size: .06, map: makeDotTexture(), transparent: true, opacity: .3,
+  color: 0x8a7660, depthWrite: false, sizeAttenuation: true
 }));
 scene.add(dust);
 
-let cP, cT, nd = 4.4;
+let cP, cT, nd = 4.0;
 const N = items.length + 1;
 
 function fit() {
@@ -165,14 +156,16 @@ function fit() {
   cam.aspect = a;
   cam.updateProjectionMatrix();
 
-  const ov = Math.max(16, 14 / (.93 * a));
-  nd = Math.max(4.2, 2.6 / (.93 * a));
+  const ov = Math.max(14, 12 / (.93 * a));
+  nd = Math.max(3.4, 2.1 / (.93 * a));
   scene.fog.near = ov * .9;
   scene.fog.far = ov * 2.6;
 
-  const P = [V(0, .5, ov)], T = [V(0, 1.2, 0)];
+  const wideShot = V(0, 6, ov);
+  const wideTarget = V(0, 5.5, 0);
+  const P = [wideShot], T = [wideTarget];
   items.forEach(o => {
-    P.push(V(o.x + .5, o.y + .2, o.z + nd));
+    P.push(V(o.x + .4, o.y + .15, o.z + nd));
     T.push(V(o.x, o.y, o.z));
   });
   cP = new THREE.CatmullRomCurve3(P, true);
@@ -213,8 +206,8 @@ const tmp = V(0, 0, 0);
 function updateCloth(o, T) {
   const pos = o.geo.attributes.position;
   const arr = pos.array, base = o.base;
-  const ampZ = (RM ? .03 : .22) * o.k;
-  const ampX = (RM ? .02 : .12) * o.k;
+  const ampZ = (RM ? .025 : .16) * o.k;
+  const ampX = (RM ? .015 : .09) * o.k;
   const freq = .9 + o.sp * .3;
   for (let idx = 0; idx < arr.length; idx += 3) {
     const bx = base[idx], by = base[idx + 1];
@@ -240,8 +233,8 @@ function frame(now) {
   cam.lookAt(cT.getPoint(t));
 
   const T = now / 1000, A = RM ? .15 : 1;
-  world.rotation.y = Math.sin(T * .15) * .03 * A;
-  world.position.x = Math.sin(T * .11) * .15 * A;
+  world.rotation.y = Math.sin(T * .15) * .02 * A;
+  world.position.x = Math.sin(T * .11) * .1 * A;
 
   items.forEach(o => {
     tmp.set(o.x, o.y, o.z);
@@ -252,19 +245,23 @@ function frame(now) {
     const sclTarget = 1 + near * .4;
     o.scl += (sclTarget - o.scl) * .06;
     o.g.scale.setScalar(o.scl);
-    o.g.rotation.z = Math.sin(T * o.sp + o.ph2) * .035 * o.k * A;
-    o.g.rotation.x = Math.sin(T * o.sp * .7 + o.ph2 * 2) * .02 * o.k * A;
+    o.g.rotation.z = o.baseRotZ + Math.sin(T * o.sp + o.ph2) * .025 * o.k * A;
+    o.g.rotation.x = Math.sin(T * o.sp * .7 + o.ph2 * 2) * .015 * o.k * A;
     updateCloth(o, T * A);
   });
 
-  // dust drifts slowly upward and sideways, wrapping around
+  bgRopes.forEach(o => {
+    o.group.rotation.z = Math.sin(T * o.sp + o.phase) * .045 * A;
+    o.group.rotation.x = Math.sin(T * o.sp * .8 + o.phase * 1.3) * .03 * A;
+  });
+
   if (DUST_N) {
     const dp = dustGeo.attributes.position.array;
     for (let i = 0; i < DUST_N; i++) {
       const sd = dustSeed[i];
       dp[i * 3] += Math.sin(T * .05 + sd) * .0009 * A;
       dp[i * 3 + 1] += .0016 * A;
-      if (dp[i * 3 + 1] > 11) dp[i * 3 + 1] = -7;
+      if (dp[i * 3 + 1] > 13) dp[i * 3 + 1] = -5;
     }
     dustGeo.attributes.position.needsUpdate = true;
   }
